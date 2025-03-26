@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create EC2 resources
+ 
+Parameters:
+  KeyPairName:
+    Type: String
+    Description: mybanyi-useast
+  InstanceType:
+    Type: String
+    Description: EC2 Instance Type
+    Default: t2.micro
+  AMI:
+    Type: String
+    Description: AMI ID
+    Default: ami-05b10e08d247fb927
+ 
+Resources:
+  # # Security Group for the Application Load Balancer
+  # ALBSecurityGroup:
+  #   Type: AWS::EC2::SecurityGroup
+  #   Properties:
+  #     GroupDescription: Security group for the Application Load Balancer
+  #     VpcId: !Ref VPCId
+  #     SecurityGroupIngress:
+  #       - IpProtocol: tcp
+  #         FromPort: 80
+  #         ToPort: 80
+  #         CidrIp: 0.0.0.0/0
+  #       - IpProtocol: tcp
+  #         FromPort: 443
+  #         ToPort: 443
+  #         CidrIp: 0.0.0.0/0
+ 
+  # EC2 instance for the web server
+  WebServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0 # This means that this is the primary network interface for the instance.
+          SubnetId: !ImportValue EffulgenceNetwork-PublicSubnet1Id
+          GroupSet:
+            - !ImportValue EffulgenceNetwork-WebServerSGId
+      ImageId: !Ref AMI
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sudo su
+          yum install -y httpd
+          echo "Hello, this is Effulgence Web Server" > /var/www/html/index.html
+          systemctl start httpd
+          systemctl enable httpd  
+ 
+  # EC2 instance for the application server
+  AppServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      # NetworkInterfaces:
+      #   - DeviceIndex: 1
+      #     SubnetId: !ImportValue EffulgenceNetwork-PrivateSubnet1Id
+      #     GroupSet:
+      #       - !ImportValue EffulgenceNetwork-AppServerSGId
+      SubnetId: !ImportValue "EffulgenceNetwork-PrivateSubnet1Id"
+      SecurityGroupIds:
+        - !ImportValue "EffulgenceNetwork-AppServerSGId"
+      ImageId: !Ref AMI
+ 
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: MyLoadBalancer
+      Subnets:
+        - !ImportValue EffulgenceNetwork-PublicSubnet1Id
+        - !ImportValue EffulgenceNetwork-PublicSubnet2Id
+      SecurityGroups:
+        - !ImportValue EffulgenceNetwork-ALBSGId
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds # This sets the idle timeout for the load balancer.
+          Value: '60'
+ 
+  # Target Group for the Load Balancer
+  EffulgenceTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: EffulgenceTargetGroup
+      VpcId: !ImportValue EffulgenceNetwork-VPCId
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckIntervalSeconds: 30
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      HealthCheckPath: "/"
+      Targets:
+        - Id:
+            !Ref WebServerInstance
+          Port: 80
+ 
+  # Listener for the Load Balancer
+  MyListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref EffulgenceTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+ 
+  # # Launch Template for the web server instances
+  # WebServerLaunchTemplate:
+  #   Type: AWS::EC2::LaunchTemplate
+  #   Properties:
+  #     LaunchTemplateName: MyLaunchTemplate
+  #     LaunchTemplateData:
+  #       InstanceType: !Ref InstanceType
+  #       KeyName: !Ref KeyPairName
+  #       NetworkInterfaces:
+  #         - AssociatePublicIpAddress: true
+  #           DeviceIndex: 0
+  #           SubnetId: !Ref PublicSubnet1Id
+  #           Groups:
+  #             - !Ref WebServerSecurityGroupId
+  #       ImageId: !Ref AMI
+ 
+  # # Auto Scaling Group for the web server instances
+  # WebServerAutoScalingGroup:
+  #   Type: AWS::AutoScaling::AutoScalingGroup
+  #   Properties:
+  #     VPCZoneIdentifier:
+  #       - !Ref PublicSubnet1Id
+  #       - !Ref PublicSubnet2Id
+  #     LaunchTemplate:
+  #       LaunchTemplateId: !Ref WebServerLaunchTemplate
+  #       Version: !GetAtt WebServerLaunchTemplate.LatestVersionNumber
+  #     MinSize: 1
+  #     MaxSize: 3
+  #     DesiredCapacity: 2
+  #     TargetGroupARNs:
+  #       - !Ref MyTargetGroup
+ 
+Outputs:
+  WebServerInstanceId:
+    Description: Web Server EC2 Instance Id
+    Value: !Ref WebServerInstance
+    Export:
+      Name: !Sub "${AWS::StackName}-WebServerInstanceId"
+ 
+  AppServerInstanceId:
+    Description: Application Server EC2 Instance Id
+    Value: !Ref AppServerInstance
+    Export:
+      Name: !Sub "${AWS::StackName}-AppServerInstanceId"
+ 
+  LoadBalancerDNSName:
+    Description: Load Balancer DNS Name
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-LoadBalancerDNSName"
+ 
+  # WebServerAutoScalingGroupName:
+  #   Description: Auto Scaling Group for Web Servers
+  #   Value: !Ref WebServerAutoScalingGroup
